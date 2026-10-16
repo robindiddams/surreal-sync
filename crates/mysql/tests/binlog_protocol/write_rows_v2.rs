@@ -86,3 +86,65 @@ fn table_map_parses_signedness_optional_metadata() {
     assert!(!tm.columns[0].unsigned);
     assert!(tm.columns[1].unsigned);
 }
+
+fn char_table_map(meta: [u8; 2]) -> TableMapEvent {
+    let mut body = hex::decode(concat!(
+        "010000000000", // table_id (6 bytes)
+        "0000",         // flags
+        "04",           // db name len
+        "74657374",     // "test"
+        "00",           // db name terminator
+        "01",           // table name len
+        "74",           // "t"
+        "00",           // table name terminator
+        "01",           // 1 column
+        "fe",           // STRING
+        "02",           // metadata len
+    ))
+    .expect("valid hex");
+    body.extend_from_slice(&meta);
+    body.push(0x00); // null bitmap
+    TableMapEvent::parse(&body, 8, Flavor::MySql).expect("parse table map")
+}
+
+#[test]
+fn table_map_parses_char_metadata() {
+    // (metadata bytes, byte length)
+    let cases = [
+        ([0xfe, 0x90], 144),  // CHAR(36) utf8mb4
+        ([0xfe, 0xf8], 248),  // CHAR(62) utf8mb4, low byte equals SET type code
+        ([0xee, 0x00], 256),  // CHAR(64) utf8mb4
+        ([0xce, 0xfc], 1020), // CHAR(255) utf8mb4
+    ];
+    for (meta, len) in cases {
+        let tm = char_table_map(meta);
+        assert_eq!(tm.columns[0].column_type, MYSQL_TYPE_STRING);
+        assert_eq!(
+            tm.columns[0].metadata,
+            ColumnMetadata::EnumSet { max_length: len }
+        );
+    }
+}
+
+#[test]
+fn write_rows_char_over_255_bytes() {
+    let tm = char_table_map([0xce, 0xfc]); // CHAR(255) utf8mb4
+    let body = hex::decode(concat!(
+        "010000000000", // table_id
+        "0000",         // flags
+        "0200",         // var_header_len = 2 (no extra row info)
+        "01",           // width = 1 column
+        "01",           // columns present
+        "00",           // null bitmap (no nulls)
+        "0300",         // CHAR length 3 (LE u16)
+        "616263",       // "abc"
+    ))
+    .expect("valid hex");
+
+    let event = RowsEvent::parse_write(&body, &tm.columns, Flavor::MySql, true, true, 10)
+        .expect("parse write rows v2");
+    let RowChange::Insert(cells) = &event.rows[0] else {
+        panic!("expected insert row");
+    };
+    assert_eq!(cells[0], CellValue::String("abc".into()));
+}

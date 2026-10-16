@@ -233,21 +233,9 @@ fn read_column_meta(
             if byte0 == MYSQL_TYPE_ENUM || byte0 == MYSQL_TYPE_SET {
                 return Ok((byte0, u16::from(byte1)));
             }
-            let length = if (byte0 & 0x30) != 0x30 {
-                u16::from(byte1) | (u16::from(byte0 & 0x30) << 4)
-            } else {
-                u16::from(byte1)
-            };
-            let real = if byte0 & 0x30 != 0x30 {
-                byte0 | 0x30
-            } else {
-                byte1
-            };
-            if real == MYSQL_TYPE_ENUM_REAL || real == MYSQL_TYPE_SET_REAL {
-                Ok((real, length))
-            } else {
-                Ok((MYSQL_TYPE_STRING, length))
-            }
+            // byte0 = real_type ^ ((len & 0x300) >> 4), byte1 = len & 0xFF
+            let length = ((u16::from(byte0 & 0x30) << 4) ^ 0x300) | u16::from(byte1);
+            Ok((MYSQL_TYPE_STRING, length))
         }
         MYSQL_TYPE_VARCHAR
         | MYSQL_TYPE_VAR_STRING
